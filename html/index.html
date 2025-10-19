@@ -1,0 +1,229 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Job Minigame</title>
+
+  <style>
+    /* inlined from style.css */
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: rgba(0, 0, 0, 0);
+      color: #fff;
+    }
+    #container.hidden { display: none; }
+    #container {
+      position: fixed;
+      inset: 0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      z-index: 99999;
+    }
+    #panel {
+      width: 420px;
+      background: rgba(10,10,10,0.95);
+      border-radius: 8px;
+      padding: 18px;
+      text-align:center;
+      box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+    }
+    #sequence {
+      display:flex;
+      gap:10px;
+      justify-content:center;
+      margin: 12px 0 10px 0;
+    }
+    .key {
+      background: rgba(255,255,255,0.08);
+      padding:14px 18px;
+      border-radius:6px;
+      min-width:46px;
+      font-weight:700;
+    }
+    #status { margin: 8px 0; }
+    #progressWrap {
+      height: 12px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+      overflow:hidden;
+      margin-top: 12px;
+    }
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      transition: width 0.2s linear;
+      background: linear-gradient(90deg, rgba(0,255,128,0.9), rgba(0,200,255,0.9));
+    }
+    #controls { margin-top: 12px; }
+    button { padding: 8px 12px; border-radius:6px; border:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div id="container" class="hidden">
+    <div id="panel">
+      <h2 id="title">Dismantle: Quick-Time</h2>
+      <div id="sequence"></div>
+      <div id="status">Follow the sequence!</div>
+      <div id="progressWrap">
+        <div id="progressBar"></div>
+      </div>
+      <div id="controls">
+        <button id="giveup">Give Up</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* inlined from main.js */
+    (function(){
+      let container = document.getElementById('container')
+      let sequenceEl = document.getElementById('sequence')
+      let statusEl = document.getElementById('status')
+      let progressBar = document.getElementById('progressBar')
+      let giveupBtn = document.getElementById('giveup')
+
+      let settings = { sequenceLength: 3, keyTimeLimit: 2000 }
+
+      window.addEventListener('message', (ev) => {
+        const d = ev.data
+        if (d.action === 'startMinigame') {
+          settings = Object.assign(settings, d.settings || {})
+          startMinigame()
+        } else if (d.action === 'close') {
+          closeNui()
+        }
+      })
+
+      giveupBtn.addEventListener('click', () => {
+        complete(false)
+      })
+
+      function startMinigame() {
+        container.classList.remove('hidden')
+        statusEl.innerText = 'Get ready...'
+        buildSequence(settings.sequenceLength)
+      }
+
+      function closeNui() {
+        container.classList.add('hidden')
+        reset()
+      }
+
+      let seq = []
+      let currentIndex = 0
+      let progressTimer = null
+      let mapKeyToName = { ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', KeyE: 'E' }
+
+      function buildSequence(len) {
+        seq = []
+        const choices = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyE']
+        for (let i=0;i<len;i++) {
+          seq.push(choices[Math.floor(Math.random()*choices.length)])
+        }
+        renderSequence()
+        currentIndex = 0
+        statusEl.innerText = 'Follow the sequence.'
+        startKeyTimeout()
+        document.addEventListener('keydown', onKey)
+        animateProgress()
+      }
+
+      function renderSequence() {
+        sequenceEl.innerHTML = ''
+        seq.forEach((k, idx) => {
+          const div = document.createElement('div')
+          div.className = 'key'
+          div.id = 'k' + idx
+          div.innerText = mapKeyToName[k] || k
+          sequenceEl.appendChild(div)
+        })
+      }
+
+      function onKey(e) {
+        const expected = seq[currentIndex]
+        if (e.code === expected) {
+          // correct
+          const el = document.getElementById('k' + currentIndex)
+          if (el) el.style.background = 'rgba(0,255,128,0.2)'
+          currentIndex++
+          restartKeyTimeout()
+          if (currentIndex >= seq.length) {
+            // success
+            complete(true)
+          }
+        } else {
+          // fail early
+          complete(false)
+        }
+      }
+
+      function startKeyTimeout() {
+        clearTimeout(progressTimer)
+        progressTimer = setTimeout(() => {
+          complete(false)
+        }, settings.keyTimeLimit)
+      }
+
+      function restartKeyTimeout() {
+        startKeyTimeout()
+      }
+
+      function animateProgress() {
+        let pct = 0
+        progressBar.style.width = '0%'
+        const step = 100 / (settings.keyTimeLimit / 100)
+        const iv = setInterval(() => {
+          pct += step
+          if (pct >= 100) {
+            pct = 100
+            clearInterval(iv)
+          }
+          progressBar.style.width = (pct) + '%'
+        }, 100)
+      }
+
+      function complete(success) {
+        document.removeEventListener('keydown', onKey)
+        clearTimeout(progressTimer)
+        // send result to client Lua
+        fetch(`https://${GetParentResourceName()}/minigameComplete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+          body: JSON.stringify({
+            success: success,
+            pos: null
+          })
+        }).then(resp => resp.text()).then(() => {
+          closeNui()
+        }).catch(() => {
+          // still close NUI if fetch fails
+          closeNui()
+        })
+      }
+
+      function reset() {
+        seq = []
+        currentIndex = 0
+        progressBar.style.width = '0%'
+        sequenceEl.innerHTML = ''
+      }
+
+      // expose close handler for NUI call
+      window.addEventListener('keydown', function(e){
+        if (e.key === 'Escape') {
+          // notify resource that the NUI was closed (optional)
+          fetch(`https://${GetParentResourceName()}/close`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+            body: JSON.stringify({})
+          }).catch(()=>{})
+          closeNui()
+        }
+      })
+    })();
+  </script>
+</body>
+</html>
